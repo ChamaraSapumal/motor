@@ -12,17 +12,17 @@ import {
   WifiOff,
   Radio,
   Gauge as GaugeIcon,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import {
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Area,
-  AreaChart,
 } from "recharts";
 
 const firebaseConfig = {
@@ -39,7 +39,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
 
-// Circular Gauge Component
 const CircularGauge = ({ value, max, label, color }) => {
   const percentage = (Math.abs(value) / max) * 100;
   const circumference = 2 * Math.PI * 45;
@@ -79,7 +78,6 @@ const CircularGauge = ({ value, max, label, color }) => {
   );
 };
 
-// Speed Meter Component
 const SpeedMeter = ({ speed }) => {
   const angle = (speed / 255) * 180 - 90;
 
@@ -93,8 +91,6 @@ const SpeedMeter = ({ speed }) => {
             <stop offset="100%" stopColor="#10b981" />
           </linearGradient>
         </defs>
-
-        {/* Meter Arc */}
         <path
           d="M 20 90 A 80 80 0 0 1 180 90"
           stroke="url(#meterGradient)"
@@ -102,8 +98,6 @@ const SpeedMeter = ({ speed }) => {
           fill="none"
           strokeLinecap="round"
         />
-
-        {/* Background Arc */}
         <path
           d="M 20 90 A 80 80 0 0 1 180 90"
           stroke="#e5e7eb"
@@ -112,8 +106,6 @@ const SpeedMeter = ({ speed }) => {
           strokeLinecap="round"
           opacity="0.3"
         />
-
-        {/* Tick Marks */}
         {[0, 64, 128, 192, 255].map((val, i) => {
           const tickAngle = (val / 255) * 180 - 90;
           const startX = 100 + 70 * Math.cos((tickAngle * Math.PI) / 180);
@@ -133,8 +125,6 @@ const SpeedMeter = ({ speed }) => {
             />
           );
         })}
-
-        {/* Needle */}
         <g transform={`rotate(${angle} 100 90)`}>
           <line
             x1="100"
@@ -148,7 +138,6 @@ const SpeedMeter = ({ speed }) => {
           <circle cx="100" cy="90" r="6" fill="#1f2937" />
         </g>
       </svg>
-
       <div className="absolute bottom-0 text-center">
         <div className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent">
           {speed}
@@ -171,7 +160,10 @@ export default function MotorController() {
   const [motorAHistory, setMotorAHistory] = useState([]);
   const [motorBHistory, setMotorBHistory] = useState([]);
   const [activePreset, setActivePreset] = useState(null);
-  const [batteryLevel] = useState(87); // Mock battery level
+  const [batteryLevel] = useState(87);
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [recognition, setRecognition] = useState(null);
 
   useEffect(() => {
     const statusRef = ref(database, "status/timestamp");
@@ -182,35 +174,145 @@ export default function MotorController() {
         setIsConnected(Date.now() - timestamp < 5000);
       }
     });
-
     return () => unsubscribe();
   }, []);
 
-  // Update speed history
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      ("webkitSpeechRecognition" in window || "SpeechRecognition" in window)
+    ) {
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognitionInstance = new SpeechRecognition();
+
+      recognitionInstance.continuous = true;
+      recognitionInstance.interimResults = true;
+      recognitionInstance.lang = "en-US";
+
+      recognitionInstance.onresult = (event) => {
+        let finalTranscript = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript
+            .toLowerCase()
+            .trim();
+          if (event.results[i].isFinal) {
+            finalTranscript = transcript;
+            processVoiceCommand(transcript);
+          }
+        }
+        if (finalTranscript) {
+          setTranscript(finalTranscript);
+        }
+      };
+
+      recognitionInstance.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        setIsListening(false);
+      };
+
+      recognitionInstance.onend = () => {
+        if (isListening) {
+          recognitionInstance.start();
+        }
+      };
+
+      setRecognition(recognitionInstance);
+    }
+  }, []);
+
+  const processVoiceCommand = (command) => {
+    if (
+      command.includes("forward") ||
+      command.includes("go") ||
+      command.includes("move forward")
+    ) {
+      moveForward();
+    } else if (
+      command.includes("backward") ||
+      command.includes("back") ||
+      command.includes("reverse")
+    ) {
+      moveBackward();
+    } else if (command.includes("left") || command.includes("turn left")) {
+      turnLeft();
+    } else if (command.includes("right") || command.includes("turn right")) {
+      turnRight();
+    } else if (
+      command.includes("stop") ||
+      command.includes("halt") ||
+      command.includes("brake")
+    ) {
+      stopMotors();
+    } else if (command.includes("slow") || command.includes("slow speed")) {
+      applyPreset("slow");
+    } else if (command.includes("medium") || command.includes("medium speed")) {
+      applyPreset("medium");
+    } else if (
+      command.includes("fast") ||
+      command.includes("full speed") ||
+      command.includes("max speed")
+    ) {
+      applyPreset("fast");
+    } else if (command.includes("cruise")) {
+      applyPreset("cruise");
+    } else if (
+      command.includes("increase speed") ||
+      command.includes("speed up") ||
+      command.includes("faster")
+    ) {
+      setSpeed((prev) => Math.min(255, prev + 50));
+    } else if (
+      command.includes("decrease speed") ||
+      command.includes("slow down") ||
+      command.includes("slower")
+    ) {
+      setSpeed((prev) => Math.max(0, prev - 50));
+    } else if (
+      command.includes("emergency") ||
+      command.includes("emergency stop")
+    ) {
+      emergencyStop();
+    }
+  };
+
+  const toggleVoiceControl = () => {
+    if (!recognition) {
+      alert(
+        "Voice recognition is not supported in your browser. Please use Chrome, Edge, or Safari."
+      );
+      return;
+    }
+    if (isListening) {
+      recognition.stop();
+      setIsListening(false);
+      setTranscript("");
+    } else {
+      recognition.start();
+      setIsListening(true);
+    }
+  };
+
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
       const time = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
-
       setSpeedHistory((prev) => {
         const newData = [
           ...prev,
           { time, speed, motorA: Math.abs(motorA), motorB: Math.abs(motorB) },
         ];
-        return newData.slice(-20); // Keep last 20 points
+        return newData.slice(-20);
       });
-
       setMotorAHistory((prev) => {
         const newData = [...prev, { time, value: motorA }];
         return newData.slice(-20);
       });
-
       setMotorBHistory((prev) => {
         const newData = [...prev, { time, value: motorB }];
         return newData.slice(-20);
       });
     }, 1000);
-
     return () => clearInterval(interval);
   }, [speed, motorA, motorB]);
 
@@ -279,7 +381,6 @@ export default function MotorController() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-gray-50 p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
         <div className="bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200 mb-6">
           <div className="relative bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 p-6">
             <div className="absolute inset-0 bg-black/5"></div>
@@ -298,6 +399,23 @@ export default function MotorController() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={toggleVoiceControl}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-sm transition-all ${
+                    isListening
+                      ? "bg-red-500/90 text-white animate-pulse"
+                      : "bg-white/20 text-white hover:bg-white/30"
+                  }`}
+                >
+                  {isListening ? (
+                    <Mic className="w-4 h-4" />
+                  ) : (
+                    <MicOff className="w-4 h-4" />
+                  )}
+                  <span className="text-sm font-semibold">
+                    {isListening ? "Listening..." : "Voice Control"}
+                  </span>
+                </button>
                 <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/20 backdrop-blur-sm">
                   <GaugeIcon className="w-4 h-4 text-white" />
                   <span className="text-sm font-semibold text-white">
@@ -326,16 +444,13 @@ export default function MotorController() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Control Panel */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Speed Meter Card */}
             <div className="bg-white rounded-3xl shadow-xl p-6 border border-gray-200">
               <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                 <Zap className="w-5 h-5 text-emerald-600" />
                 Speed Control
               </h2>
               <SpeedMeter speed={speed} />
-
               <div className="mt-6">
                 <input
                   type="range"
@@ -353,8 +468,6 @@ export default function MotorController() {
                   }}
                 />
               </div>
-
-              {/* Speed Presets */}
               <div className="grid grid-cols-4 gap-2 mt-4">
                 <button
                   onClick={() => applyPreset("slow")}
@@ -399,13 +512,30 @@ export default function MotorController() {
               </div>
             </div>
 
-            {/* Direction Controls */}
             <div className="bg-white rounded-3xl shadow-xl p-6 border border-gray-200">
               <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                 <Activity className="w-5 h-5 text-emerald-600" />
                 Direction Control
               </h2>
-
+              {isListening && (
+                <div className="mb-4 p-4 bg-gradient-to-r from-red-50 to-pink-50 rounded-xl border border-red-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Mic className="w-4 h-4 text-red-600 animate-pulse" />
+                    <span className="text-sm font-semibold text-red-600">
+                      Voice Command Active
+                    </span>
+                  </div>
+                  {transcript && (
+                    <p className="text-sm text-gray-700 italic">
+                      "{transcript}"
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">
+                    Try: "forward", "backward", "left", "right", "stop", "fast",
+                    "slow"
+                  </p>
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-3 max-w-md mx-auto">
                 <div className="col-start-2">
                   <button
@@ -418,7 +548,6 @@ export default function MotorController() {
                     <ChevronUp className="w-10 h-10 text-white group-active:scale-90 transition-transform" />
                   </button>
                 </div>
-
                 <div className="col-start-1 row-start-2">
                   <button
                     onMouseDown={turnLeft}
@@ -430,7 +559,6 @@ export default function MotorController() {
                     <ChevronUp className="w-10 h-10 text-white -rotate-90 group-active:scale-90 transition-transform" />
                   </button>
                 </div>
-
                 <div className="col-start-2 row-start-2">
                   <button
                     onClick={emergencyStop}
@@ -439,7 +567,6 @@ export default function MotorController() {
                     <Square className="w-10 h-10 text-white fill-white group-active:scale-90 transition-transform" />
                   </button>
                 </div>
-
                 <div className="col-start-3 row-start-2">
                   <button
                     onMouseDown={turnRight}
@@ -451,7 +578,6 @@ export default function MotorController() {
                     <ChevronUp className="w-10 h-10 text-white rotate-90 group-active:scale-90 transition-transform" />
                   </button>
                 </div>
-
                 <div className="col-start-2 row-start-3">
                   <button
                     onMouseDown={moveBackward}
@@ -464,7 +590,6 @@ export default function MotorController() {
                   </button>
                 </div>
               </div>
-
               <button
                 onClick={emergencyStop}
                 className="w-full mt-4 px-6 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-all shadow-lg"
@@ -474,14 +599,11 @@ export default function MotorController() {
             </div>
           </div>
 
-          {/* Monitoring Panel */}
           <div className="space-y-6">
-            {/* Motor Gauges */}
             <div className="bg-white rounded-3xl shadow-xl p-6 border border-gray-200">
               <h2 className="text-lg font-bold text-gray-800 mb-6">
                 Motor Status
               </h2>
-
               <div className="flex justify-around">
                 <div className="text-center">
                   <CircularGauge
@@ -506,7 +628,6 @@ export default function MotorController() {
                       : "Stopped"}
                   </div>
                 </div>
-
                 <div className="text-center">
                   <CircularGauge
                     value={motorB}
@@ -533,12 +654,10 @@ export default function MotorController() {
               </div>
             </div>
 
-            {/* Real-time Chart */}
             <div className="bg-white rounded-3xl shadow-xl p-6 border border-gray-200">
               <h2 className="text-lg font-bold text-gray-800 mb-4">
                 Real-time Activity
               </h2>
-
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={speedHistory}>
                   <defs>
@@ -571,7 +690,6 @@ export default function MotorController() {
                   />
                 </AreaChart>
               </ResponsiveContainer>
-
               <div className="flex justify-center gap-4 mt-4 text-xs">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
@@ -584,12 +702,10 @@ export default function MotorController() {
               </div>
             </div>
 
-            {/* System Info */}
             <div className="bg-white rounded-3xl shadow-xl p-6 border border-gray-200">
               <h2 className="text-lg font-bold text-gray-800 mb-4">
                 System Info
               </h2>
-
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Connection</span>
@@ -617,6 +733,16 @@ export default function MotorController() {
                   <span className="text-sm text-gray-600">Active Mode</span>
                   <span className="text-sm font-semibold text-gray-800">
                     {activePreset || "Manual"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Voice Control</span>
+                  <span
+                    className={`text-sm font-semibold ${
+                      isListening ? "text-red-600" : "text-gray-400"
+                    }`}
+                  >
+                    {isListening ? "Active" : "Inactive"}
                   </span>
                 </div>
               </div>
